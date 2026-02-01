@@ -281,6 +281,31 @@ export abstract class AbstractChat<UI_MESSAGE extends UIMessage> {
   }
 
   /**
+   * Filters out incomplete tool calls from messages.
+   */
+  private filterIncompleteToolCalls(messages: UI_MESSAGE[]): UI_MESSAGE[] {
+    return messages
+      .map(msg => {
+        if (msg.role === 'assistant' && msg.parts) {
+          const filteredParts = msg.parts.filter(part => {
+            if (!isToolUIPart(part)) return true;
+            // Keep only complete tool calls
+            return (
+              part.state === 'output-available' ||
+              part.state === 'output-error' ||
+              part.state === 'output-denied'
+            );
+          });
+          // Remove messages with no parts after filtering
+          if (filteredParts.length === 0) return null;
+          return { ...msg, parts: filteredParts };
+        }
+        return msg;
+      })
+      .filter((msg): msg is UI_MESSAGE => msg !== null);
+  }
+
+  /**
    * Appends or replaces a user message to the chat list. This triggers the API call to fetch
    * the assistant's response.
    *
@@ -309,6 +334,8 @@ export abstract class AbstractChat<UI_MESSAGE extends UIMessage> {
     options?: ChatRequestOptions,
   ): Promise<void> => {
     if (message == null) {
+      // Filter incomplete tool calls before resubmitting
+      this.state.messages = this.filterIncompleteToolCalls(this.state.messages);
       await this.makeRequest({
         trigger: 'submit-message',
         messageId: this.lastMessage?.id,
@@ -368,6 +395,11 @@ export abstract class AbstractChat<UI_MESSAGE extends UIMessage> {
         role: uiMessage.role ?? 'user',
         metadata: message.metadata,
       } as UI_MESSAGE);
+    }
+
+    // Filter incomplete tool calls before sending a new message
+    if (message.messageId == null) {
+      this.state.messages = this.filterIncompleteToolCalls(this.state.messages);
     }
 
     await this.makeRequest({
